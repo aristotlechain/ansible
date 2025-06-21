@@ -1,0 +1,103 @@
+- name: Install Azure DevOps Self-Hosted Agent with Docker
+  hosts: agents
+  become: true
+
+  vars:
+    agent_user: "azureuser"
+    agent_dir: "/home/aristotle/adoagent"
+    azure_devops_org: "101516795-Savvy"
+    azure_devops_pat: "EeCsFmhftfcZMZE1p2vVasKdLfz0XmZF8wubmAfQN4IEgPOJhTeOJQQJ99BFACAAAAAbsQ3UAAASAZDObHmR"
+    azure_devops_pool: "Default"
+    azure_devops_url: "https://dev.azure.com/101516795-Savvy"
+
+  tasks:
+    - name: Install basic dependencies
+      apt:
+        name:
+          - curl
+          - libcurl4
+          - libssl-dev
+          - jq
+          - apt-transport-https
+          - ca-certificates
+          - software-properties-common
+        state: present
+        update_cache: yes
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+        state: present
+        filename: docker
+
+    - name: Install Docker Engine
+      apt:
+        name: docker-ce
+        state: latest
+        update_cache: yes
+
+    - name: Enable and start Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Create agent user
+      user:
+        name: "{{ agent_user }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Add agent user to docker group
+      user:
+        name: "{{ agent_user }}"
+        groups: docker
+        append: yes
+
+    - name: Create installation directory
+      file:
+        path: "{{ agent_dir }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+
+    - name: Download Azure DevOps agent
+      become_user: "{{ agent_user }}"
+      shell: |
+        cd {{ agent_dir }}
+        curl -O https://vstsagentpackage.azureedge.net/agent/3.236.0/vsts-agent-linux-x64-3.236.0.tar.gz
+        tar zxvf vsts-agent-linux-x64-3.236.0.tar.gz
+      args:
+        creates: "{{ agent_dir }}/config.sh"
+
+    - name: Configure the agent
+      become_user: "{{ agent_user }}"
+      shell: |
+        ./config.sh --unattended \
+        --url {{ azure_devops_url }} \
+        --auth pat \
+        --token {{ azure_devops_pat }} \
+        --pool {{ azure_devops_pool }} \
+        --agent $(hostname) \
+        --acceptTeeEula
+      args:
+        chdir: "{{ agent_dir }}"
+
+    - name: Install agent as service
+      become_user: "{{ agent_user }}"
+      shell: |
+        sudo ./svc.sh install
+        sudo ./svc.sh start
+      args:
+        chdir: "{{ agent_dir }}"
+
+    - name: Ensure agent service is running
+      systemd:
+        name: vsts.agent.*
+        state: started
+        enabled: yes
